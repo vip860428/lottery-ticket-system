@@ -92,30 +92,26 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         # 核心邏輯計算
         # ---------------------------------------------------------
         
-        # 1. 【條件一】：指定產品編號 -> 數量即為張數，並計算各訂單中指定產品的金額小計總和
+        # 1. 【條件一】：指定產品編號 -> 數量即為張數
         df_cond1 = df_sales[df_sales['產品編號'].isin(specified_pids)].copy()
-        
-        # 每個會員的條件一總張數
         summary_cond1 = df_cond1.groupby(['會員編號', '會員名稱'])['數量'].sum().reset_index()
         summary_cond1.rename(columns={'數量': 'cond1_tickets'}, inplace=True)
 
-        # 2. 針對每一筆「訂購單號」，計算其「原始訂單總金額」以及「條件一產品的金額小計總和」
+        # 2. 計算每張訂單中屬於指定產品的金額小計總和，並自訂單總金額中扣除
         order_base = df_sales.groupby('訂購單號').agg({
             '會員編號': 'first',
             '會員名稱': 'first',
             '訂單總金額': 'first'
         }).reset_index()
 
-        # 計算每張訂單中屬於指定產品的金額小計總和
         order_cond1_subtotal = df_cond1.groupby('訂購單號')['金額小計'].sum().reset_index()
         order_cond1_subtotal.rename(columns={'金額小計': 'excluded_subtotal'}, inplace=True)
 
-        # 合併並計算「扣除指定產品金額小計後」的剩餘金額
         order_merged = pd.merge(order_base, order_cond1_subtotal, on='訂購單號', how='left')
         order_merged['excluded_subtotal'] = order_merged['excluded_subtotal'].fillna(0)
         order_merged['剩餘訂單金額'] = order_merged['訂單總金額'] - order_merged['excluded_subtotal']
 
-        # 3. 依照「剩餘訂單金額」跑條件二與條件三級距計算
+        # 3. 依照剩餘金額跑條件二與條件三級距計算
         def calc_remaining_tickets(amt):
             if amt >= 12800:
                 return int(amt // 12800) * 2
@@ -125,11 +121,9 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
                 return 0
 
         order_merged['other_tickets'] = order_merged['剩餘訂單金額'].apply(calc_remaining_tickets)
-
-        # 4. 彙整每個會員在條件二、三獲得的抽獎券總數
         summary_other = order_merged.groupby(['會員編號', '會員名稱'])['other_tickets'].sum().reset_index()
 
-        # 5. 合併所有條件結果
+        # 4. 合併所有條件結果
         all_members = df_sales[['會員編號', '會員名稱']].drop_duplicates()
         merged = pd.merge(all_members, summary_cond1, on=['會員編號', '會員名稱'], how='left')
         merged = pd.merge(merged, summary_other, on=['會員編號', '會員名稱'], how='left')
@@ -137,11 +131,10 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         merged['other_tickets'] = merged['other_tickets'].fillna(0).astype(int)
         merged['抽獎券總共張數'] = merged['cond1_tickets'] + merged['other_tickets']
 
-        # 條件四檔案 A：可供下載之彙總統計檔
         df_summary_export = merged[['會員編號', '會員名稱', '抽獎券總共張數']].copy()
         df_summary_export = df_summary_export[df_summary_export['抽獎券總共張數'] > 0].reset_index(drop=True)
 
-        # 條件四檔案 B：展開為【抽獎券格式】對應檔（自動帶入身份證字號與手機號碼）
+        # 5. 展開為【抽獎券格式】對應檔
         ticket_rows = []
         ticket_counter = 1
 
@@ -168,46 +161,5 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
 
         df_ticket_export = pd.DataFrame(ticket_rows)
 
-        # 顯示處理結果預覽
-        st.success("✅ 扣除指定產品金額小計與級距計算完成！")
-        
-        st.subheader("📊 會員抽獎券統計預覽")
-        st.dataframe(df_summary_export.head(10), use_container_width=True)
-
-        st.subheader("🎟️ 抽獎券展開明細預覽")
-        st.dataframe(df_ticket_export.head(10), use_container_width=True)
-
         # ---------------------------------------------------------
-        # 提供檔案下載
-        # ---------------------------------------------------------
-        output_summary = io.BytesIO()
-        with pd.ExcelWriter(output_summary, engine='openpyxl') as writer:
-            df_summary_export.to_excel(writer, index=False, sheet_name='抽獎券彙總')
-        output_summary.seek(0)
-
-        output_tickets = io.BytesIO()
-        with pd.ExcelWriter(output_tickets, engine='openpyxl') as writer:
-            df_ticket_export.to_excel(writer, index=False, sheet_name='摸彩券明細')
-        output_tickets.seek(0)
-
-        st.subheader("📥 檔案下載")
-        d_col1, d_col2 = st.columns(2)
-        with d_col1:
-            st.download_button(
-                label="⬇️ 下載【會員抽獎券統計表.xlsx】",
-                data=output_summary,
-                file_name="會員抽獎券統計表.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        with d_col2:
-            st.download_button(
-                label="⬇️ 下載【抽獎券明細表 (含身份證與手機).xlsx】",
-                data=output_tickets,
-                file_name="抽獎券明細表.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error(f"❌ 處理過程發生錯誤：{str(e)}")
-else:
-    st.info("💡 請上傳全部三個檔案（會員銷售業績、會員管理、抽獎券格式樣板）以開始進行計算。")
+        # 畫面呈現：下載區移至最上方，
