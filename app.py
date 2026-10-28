@@ -21,7 +21,7 @@ with col3:
 st.subheader("⚙️ 條件設定")
 specified_pids_input = st.text_area(
     "【條件一】請輸入指定的產品編號（多個請用逗號、半形分號或換行分隔）",
-    value="GTH417825,\nGTH417826,\nGTH417827,\nGTH417830",
+    value="GTH417851,\nGTH417855,\nGTH417852,\nGTH417854",
     help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數（數量1=1張，數量2=2張...）"
 )
 
@@ -32,19 +32,37 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
     ]
 
     try:
-        # 通用讀取函數（支援 HTML 格式的 .xls 與標準 .xlsx）
+        # 完善的相容性讀取函數（兼顧 HTML 表格格式與傳統 Binary Excel 格式）
         def safe_read_file(uploaded_file):
+            uploaded_file.seek(0)
+            content = uploaded_file.read()
+            uploaded_file.seek(0)
+            
+            # 優先判斷是否為 HTML 導出的表格
+            try:
+                dfs = pd.read_html(uploaded_file)
+                if dfs and len(dfs) > 0:
+                    return dfs[0]
+            except Exception:
+                pass
+
+            # 嘗試使用 openpyxl 讀取 (.xlsx)
             try:
                 uploaded_file.seek(0)
-                dfs = pd.read_html(uploaded_file)
-                return dfs[0]
+                return pd.read_excel(uploaded_file, engine='openpyxl')
             except Exception:
-                try:
-                    uploaded_file.seek(0)
-                    return pd.read_excel(uploaded_file, engine='openpyxl')
-                except Exception:
-                    uploaded_file.seek(0)
-                    return pd.read_excel(uploaded_file, engine='xlrd')
+                pass
+
+            # 嘗試使用 xlrd 讀取 (.xls)
+            try:
+                uploaded_file.seek(0)
+                return pd.read_excel(uploaded_file, engine='xlrd')
+            except Exception:
+                pass
+
+            # 最後備援方案：轉為 UTF-8 字串用 read_html 解析
+            uploaded_file.seek(0)
+            return pd.read_html(content.decode('utf-8', errors='ignore'))[0]
 
         # 讀取三個檔案
         df_sales = safe_read_file(uploaded_sales)
