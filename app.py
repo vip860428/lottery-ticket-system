@@ -162,4 +162,71 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         df_ticket_export = pd.DataFrame(ticket_rows)
 
         # ---------------------------------------------------------
-        # 畫面呈現：下載區移至最上方，
+        # 畫面呈現：下載區移至最上方，並設定淺藍色放大按鈕
+        # ---------------------------------------------------------
+        st.success("✅ 資料比對與整理完成！")
+        
+        st.subheader("📥 檔案下載專區")
+        
+        # 自定義 CSS 讓下載按鈕呈現大尺寸與淺藍色外觀
+        st.markdown("""
+        <style>
+        div.stDownloadButton > button {
+            background-color: #E0F2FE !important;
+            color: #0369A1 !important;
+            font-size: 18px !important;
+            font-weight: bold !important;
+            padding: 14px 28px !important;
+            border-radius: 10px !important;
+            border: 2px solid #38BDF8 !important;
+            width: 100% !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            transition: 0.3s;
+        }
+        div.stDownloadButton > button:hover {
+            background-color: #BAE6FD !important;
+            border-color: #0284C7 !important;
+            color: #0C4A6E !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        output_summary = io.BytesIO()
+        with pd.ExcelWriter(output_summary, engine='openpyxl') as writer:
+            df_summary_export.to_excel(writer, index=False, sheet_name='抽獎券彙總')
+        output_summary.seek(0)
+
+        output_tickets = io.BytesIO()
+        with pd.ExcelWriter(output_tickets, engine='openpyxl') as writer:
+            df_ticket_export.to_excel(writer, index=False, sheet_name='摸彩券明細')
+        output_tickets.seek(0)
+
+        d_col1, d_col2 = st.columns(2)
+        with d_col1:
+            st.download_button(
+                label="⬇️ 下載【會員抽獎券統計表.xlsx】",
+                data=output_summary,
+                file_name="會員抽獎券統計表.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        with d_col2:
+            st.download_button(
+                label="⬇️ 下載【抽獎券明細表 (含身份證與手機).xlsx】",
+                data=output_tickets,
+                file_name="抽獎券明細表.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        st.markdown("---")
+
+        # 接著才顯示數據預覽
+        st.subheader("📊 會員抽獎券統計預覽")
+        st.dataframe(df_summary_export.head(10), use_container_width=True)
+
+        st.subheader("🎟️ 抽獎券展開明細預覽")
+        st.dataframe(df_ticket_export.head(10), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ 處理過程發生錯誤：{str(e)}")
+else:
+    st.info("💡 請上傳全部三個檔案（會員銷售業績、會員管理、抽獎券格式樣板）以開始進行計算。")
