@@ -8,7 +8,7 @@ st.set_page_config(page_title="會員抽獎券數據整理系統", layout="wide"
 st.title("🎟️ 會員銷售業績與抽獎券資料整理系統")
 st.markdown("請上傳 **會員銷售業績**、**會員管理** 以及 **抽獎券格式** 樣板檔案，系統將自動比對並產出對應的抽獎券檔案。")
 
-# 1. 檔案上傳區塊 (調整為三個檔案)
+# 1. 檔案上傳區塊
 col1, col2, col3 = st.columns(3)
 with col1:
     uploaded_sales = st.file_uploader("1️⃣ 上傳【會員銷售業績】(.xls / .xlsx)", type=["xls", "xlsx"])
@@ -21,7 +21,7 @@ with col3:
 st.subheader("⚙️ 條件設定")
 specified_pids_input = st.text_area(
     "【條件一】請輸入指定的產品編號（多個請用逗號、半形分號或換行分隔）",
-    value="GTH417826, GTH417854",
+    value="GTH417825,\nGTH417826,\nGTH417827,\nGTH417830",
     help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數（數量1=1張，數量2=2張...）"
 )
 
@@ -32,24 +32,25 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
     ]
 
     try:
-        # 讀取銷售檔案 (支援 HTML 格式的 .xls 檔與一般 .xlsx 檔)
-        try:
-            dfs = pd.read_html(uploaded_sales)
-            df_sales = dfs[0]
-        except Exception:
-            uploaded_sales.seek(0)
-            df_sales = pd.read_excel(uploaded_sales)
+        # 通用讀取函數（支援 HTML 格式的 .xls 與標準 .xlsx）
+        def safe_read_file(uploaded_file):
+            try:
+                uploaded_file.seek(0)
+                dfs = pd.read_html(uploaded_file)
+                return dfs[0]
+            except Exception:
+                try:
+                    uploaded_file.seek(0)
+                    return pd.read_excel(uploaded_file, engine='openpyxl')
+                except Exception:
+                    uploaded_file.seek(0)
+                    return pd.read_excel(uploaded_file, engine='xlrd')
 
-        # 讀取會員管理檔案
-        try:
-            dfs_m = pd.read_html(uploaded_members)
-            df_members = dfs_m[0]
-        except Exception:
-            uploaded_members.seek(0)
-            df_members = pd.read_excel(uploaded_members)
-
-        # 讀取摸彩券格式樣板
-        df_template = pd.read_excel(uploaded_template)
+        # 讀取三個檔案
+        df_sales = safe_read_file(uploaded_sales)
+        df_members = safe_read_file(uploaded_members)
+        df_template = pd.read_excel(uploaded_template, engine='openpyxl')
+        
         template_columns = df_template.columns.tolist() # 保留欄位結構: ['摸彩券編號', '會員編號', '會員姓名', '身份證字號', '手機號碼']
 
         # 清理銷售資料
@@ -59,10 +60,10 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         df_sales['數量'] = pd.to_numeric(df_sales['數量'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         df_sales['訂單總金額'] = pd.to_numeric(df_sales['訂單總金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-        # 清理會員管理資料 (假設會員管理檔中也有 '會員編號'、'身份證字號' / '身分證字號'、'手機號碼' 等欄位)
+        # 清理會員管理資料
         df_members['會員編號'] = df_members['會員編號'].astype(str).str.replace('="', '').str.replace('"', '').str.strip()
         
-        # 自動適應欄位名稱（支援常見的身份證字號/身分證字號、手機號碼/電話）
+        # 自動適應身份證與手機欄位名稱
         id_col = next((c for c in df_members.columns if '身份證' in c or '身分證' in c), None)
         phone_col = next((c for c in df_members.columns if '手機' in c or '電話' in c), None)
 
@@ -123,11 +124,10 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
             m_id = row['會員編號']
             m_name = row['會員名稱']
             
-            # 從會員管理對照表取得身份證與手機
             extra_info = member_info_map.get(m_id, {'身份證字號': '', '手機號碼': ''})
 
             for _ in range(total_cnt):
-                ticket_code = f"TH{ticket_counter:04d}" # 生成 TH0001, TH0002...
+                ticket_code = f"TH{ticket_counter:04d}"
                 row_dict = {col: None for col in template_columns}
                 row_dict['摸彩券編號'] = ticket_code
                 row_dict['會員編號'] = m_id
