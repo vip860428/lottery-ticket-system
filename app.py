@@ -17,23 +17,63 @@ with col2:
 with col3:
     uploaded_template = st.file_uploader("3️⃣ 上傳【抽獎券格式】樣板(.xlsx)", type=["xlsx"])
 
-# 2. 條件設定：文字框無預設文字，並加入 placeholder 提示文字與確認按鈕
+# 2. 條件設定：文字框與動態防呆按鈕
 st.subheader("⚙️ 條件設定")
 
-with st.form(key="condition_form"):
-    specified_pids_input = st.text_area(
-        "【條件一】請輸入指定的產品編號（多個請用逗號、半形分號或換行分隔）",
-        value="",
-        placeholder="請輸入產品編號",
-        help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數，且該筆金額會從訂單總金額中扣除後再計算條件二、三。"
-    )
-    
-    # 確認按鈕
-    submit_button = st.form_submit_button(label="🚀 確認並開始跑資料統整", use_container_width=True)
+# 文字框輸入
+specified_pids_input = st.text_area(
+    "【條件一】請輸入指定的產品編號（多個請用逗號、半形分號或換行分隔）",
+    value="",
+    placeholder="請輸入產品編號",
+    help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數，且該筆金額會從訂單總金額中扣除後再計算條件二、三。"
+)
 
-# 只有在三個檔案皆已上傳，且使用者點擊了確認按鈕後才執行統整
+# 檢查是否有輸入內容
+has_input = bool(specified_pids_input and specified_pids_input.strip())
+
+# 動態 CSS：依據是否有輸入內容來改變按鈕顏色與點選狀態
+if not has_input:
+    # 未輸入：紅色、禁用
+    btn_bg = "#EF4444"
+    btn_hover = "#DC2626"
+    btn_cursor = "not-allowed"
+    btn_opacity = "0.7"
+else:
+    # 已輸入：綠色、可點選
+    btn_bg = "#10B981"
+    btn_hover = "#059669"
+    btn_cursor = "pointer"
+    btn_opacity = "1.0"
+
+st.markdown(f"""
+<style>
+/* 縮小按鈕並靠左，呈現動態防呆色彩 */
+div.stButton > button {{
+    background-color: {btn_bg} !important;
+    color: white !important;
+    font-size: 15px !important;
+    font-weight: bold !important;
+    padding: 8px 20px !important;
+    border-radius: 8px !important;
+    border: none !important;
+    cursor: {btn_cursor} !important;
+    opacity: {btn_opacity} !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: 0.3s;
+    width: auto !important;
+}}
+div.stButton > button:hover {{
+    background-color: {btn_hover} !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+# 建立精巧的確認按鈕（放在左下方）
+run_clicked = st.button("🚀 確認並開始跑資料統整", disabled=not has_input)
+
+# 只有在三個檔案皆已上傳，且使用者點擊了已解鎖的確認按鈕後才執行統整
 if uploaded_sales is not None and uploaded_members is not None and uploaded_template is not None:
-    if submit_button:
+    if run_clicked:
         # 將輸入的產品編號解析成列表
         specified_pids = [
             pid.strip() for pid in specified_pids_input.replace('\n', ',').replace(';', ',').split(',') if pid.strip()
@@ -235,6 +275,9 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         except Exception as e:
             st.error(f"❌ 處理過程發生錯誤：{str(e)}")
     else:
-        st.info("💡 請在上方輸入指定的產品編號，並點擊下方的 **「確認並開始跑資料統整」** 按鈕開始計算。")
+        if not has_input:
+            st.warning("⚠️ 請先在上方輸入產品編號，按鈕解鎖後即可點擊跑資料。")
+        else:
+            st.info("💡 已輸入產品編號，請點擊左下方的 **「確認並開始跑資料統整」** 按鈕開始計算。")
 else:
     st.info("💡 請先上傳全部三個檔案（會員銷售業績、會員管理、抽獎券格式樣板）。")
