@@ -22,7 +22,7 @@ st.subheader("⚙️ 條件設定")
 specified_pids_input = st.text_area(
     "【條件一】請輸入指定的產品編號（多個請用逗號、半形分號或換行分隔）",
     value="GTH417851,\nGTH417855,\nGTH417852,\nGTH417854",
-    help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數（數量1=1張，數量2=2張...）"
+    help="若訂單中包含此指定產品編號，將依據該筆對應的數量直接換算為抽獎券張數，且該筆金額會從訂單總金額中扣除後再計算條件二、三。"
 )
 
 if uploaded_sales is not None and uploaded_members is not None and uploaded_template is not None:
@@ -32,36 +32,27 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
     ]
 
     try:
-        # 完善的相容性讀取函數（兼顧 HTML 表格格式與傳統 Binary Excel 格式）
+        # 通用檔案讀取函數
         def safe_read_file(uploaded_file):
-            uploaded_file.seek(0)
-            content = uploaded_file.read()
-            uploaded_file.seek(0)
-            
-            # 優先判斷是否為 HTML 導出的表格
             try:
+                uploaded_file.seek(0)
                 dfs = pd.read_html(uploaded_file)
                 if dfs and len(dfs) > 0:
                     return dfs[0]
             except Exception:
                 pass
-
-            # 嘗試使用 openpyxl 讀取 (.xlsx)
             try:
                 uploaded_file.seek(0)
                 return pd.read_excel(uploaded_file, engine='openpyxl')
             except Exception:
                 pass
-
-            # 嘗試使用 xlrd 讀取 (.xls)
             try:
                 uploaded_file.seek(0)
                 return pd.read_excel(uploaded_file, engine='xlrd')
             except Exception:
                 pass
-
-            # 最後備援方案：轉為 UTF-8 字串用 read_html 解析
             uploaded_file.seek(0)
+            content = uploaded_file.read()
             return pd.read_html(content.decode('utf-8', errors='ignore'))[0]
 
         # 讀取三個檔案
@@ -69,23 +60,24 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         df_members = safe_read_file(uploaded_members)
         df_template = pd.read_excel(uploaded_template, engine='openpyxl')
         
-        template_columns = df_template.columns.tolist() # 保留欄位結構: ['摸彩券編號', '會員編號', '會員姓名', '身份證字號', '手機號碼']
+        template_columns = df_template.columns.tolist()
 
         # 清理銷售資料
         df_sales['會員編號'] = df_sales['會員編號'].astype(str).str.replace('="', '').str.replace('"', '').str.strip()
         df_sales['產品編號'] = df_sales['產品編號'].astype(str).str.replace('="', '').str.replace('"', '').str.strip()
         df_sales['會員名稱'] = df_sales['會員名稱'].astype(str).str.strip()
+        df_sales['訂購單號'] = df_sales['訂購單號'].astype(str).str.replace('="', '').str.replace('"', '').str.strip()
         df_sales['數量'] = pd.to_numeric(df_sales['數量'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df_sales['單價'] = pd.to_numeric(df_sales['單價'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df_sales['金額小計'] = pd.to_numeric(df_sales['金額小計'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         df_sales['訂單總金額'] = pd.to_numeric(df_sales['訂單總金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
         # 清理會員管理資料
         df_members['會員編號'] = df_members['會員編號'].astype(str).str.replace('="', '').str.replace('"', '').str.strip()
         
-        # 自動適應身份證與手機欄位名稱
         id_col = next((c for c in df_members.columns if '身份證' in c or '身分證' in c), None)
         phone_col = next((c for c in df_members.columns if '手機' in c or '電話' in c), None)
 
-        # 擷取會員對照字典
         member_info_map = {}
         for _, row in df_members.iterrows():
             m_id = row['會員編號']
@@ -97,19 +89,34 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
             }
 
         # ---------------------------------------------------------
-        # 邏輯計算
+        # 核心邏輯計算
         # ---------------------------------------------------------
         
-        # 【條件一】：指定產品編號 -> 數量即為張數
+        # 1. 【條件一】：指定產品編號 -> 數量即為張數，並計算各訂單中指定產品的金額小計總和
         df_cond1 = df_sales[df_sales['產品編號'].isin(specified_pids)].copy()
+        
+        # 每個會員的條件一總張數
         summary_cond1 = df_cond1.groupby(['會員編號', '會員名稱'])['數量'].sum().reset_index()
         summary_cond1.rename(columns={'數量': 'cond1_tickets'}, inplace=True)
 
-        # 【條件二與三】：排除指定產品編號後的訂單金額計算
-        df_other = df_sales[~df_sales['產品編號'].isin(specified_pids)].copy()
-        order_summary = df_other.groupby(['訂購單號', '會員編號', '會員名稱'])['訂單總金額'].first().reset_index()
+        # 2. 針對每一筆「訂購單號」，計算其「原始訂單總金額」以及「條件一產品的金額小計總和」
+        order_base = df_sales.groupby('訂購單號').agg({
+            '會員編號': 'first',
+            '會員名稱': 'first',
+            '訂單總金額': 'first'
+        }).reset_index()
 
-        def calc_order_tickets(amt):
+        # 計算每張訂單中屬於指定產品的金額小計總和
+        order_cond1_subtotal = df_cond1.groupby('訂購單號')['金額小計'].sum().reset_index()
+        order_cond1_subtotal.rename(columns={'金額小計': 'excluded_subtotal'}, inplace=True)
+
+        # 合併並計算「扣除指定產品金額小計後」的剩餘金額
+        order_merged = pd.merge(order_base, order_cond1_subtotal, on='訂購單號', how='left')
+        order_merged['excluded_subtotal'] = order_merged['excluded_subtotal'].fillna(0)
+        order_merged['剩餘訂單金額'] = order_merged['訂單總金額'] - order_merged['excluded_subtotal']
+
+        # 3. 依照「剩餘訂單金額」跑條件二與條件三級距計算
+        def calc_remaining_tickets(amt):
             if amt >= 12800:
                 return int(amt // 12800) * 2
             elif amt >= 6800:
@@ -117,11 +124,12 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
             else:
                 return 0
 
-        order_summary['tickets'] = order_summary['訂單總金額'].apply(calc_order_tickets)
-        summary_other = order_summary.groupby(['會員編號', '會員名稱'])['tickets'].sum().reset_index()
-        summary_other.rename(columns={'tickets': 'other_tickets'}, inplace=True)
+        order_merged['other_tickets'] = order_merged['剩餘訂單金額'].apply(calc_remaining_tickets)
 
-        # 合併所有條件結果
+        # 4. 彙整每個會員在條件二、三獲得的抽獎券總數
+        summary_other = order_merged.groupby(['會員編號', '會員名稱'])['other_tickets'].sum().reset_index()
+
+        # 5. 合併所有條件結果
         all_members = df_sales[['會員編號', '會員名稱']].drop_duplicates()
         merged = pd.merge(all_members, summary_cond1, on=['會員編號', '會員名稱'], how='left')
         merged = pd.merge(merged, summary_other, on=['會員編號', '會員名稱'], how='left')
@@ -133,7 +141,7 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         df_summary_export = merged[['會員編號', '會員名稱', '抽獎券總共張數']].copy()
         df_summary_export = df_summary_export[df_summary_export['抽獎券總共張數'] > 0].reset_index(drop=True)
 
-        # 條件四檔案 B：展開為【抽獎券格式】對應檔（並自動帶入身份證字號與手機號碼）
+        # 條件四檔案 B：展開為【抽獎券格式】對應檔（自動帶入身份證字號與手機號碼）
         ticket_rows = []
         ticket_counter = 1
 
@@ -161,12 +169,12 @@ if uploaded_sales is not None and uploaded_members is not None and uploaded_temp
         df_ticket_export = pd.DataFrame(ticket_rows)
 
         # 顯示處理結果預覽
-        st.success("✅ 資料比對與整理完成！")
+        st.success("✅ 扣除指定產品金額小計與級距計算完成！")
         
         st.subheader("📊 會員抽獎券統計預覽")
         st.dataframe(df_summary_export.head(10), use_container_width=True)
 
-        st.subheader("🎟️ 抽獎券展開明細預覽（已自動對應身份證與手機）")
+        st.subheader("🎟️ 抽獎券展開明細預覽")
         st.dataframe(df_ticket_export.head(10), use_container_width=True)
 
         # ---------------------------------------------------------
